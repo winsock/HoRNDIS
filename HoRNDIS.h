@@ -43,12 +43,11 @@
 
 #include <IOKit/pwr_mgt/RootDomain.h>
 
-#include <IOKit/usb/IOUSBBus.h>
-#include <IOKit/usb/IOUSBNub.h>
-#include <IOKit/usb/IOUSBDevice.h>
-#include <IOKit/usb/IOUSBPipe.h>
-#include <IOKit/usb/USB.h>
-#include <IOKit/usb/IOUSBInterface.h>
+#include <IOKit/usb/StandardUSB.h>
+#include <IOKit/usb/IOUSBHostFamily.h>
+#include <IOKit/usb/IOUSBHostDevice.h>
+#include <IOKit/usb/IOUSBHostPipe.h>
+#include <IOKit/usb/IOUSBHostInterface.h>
 
 #include <UserNotification/KUNCUserNotifications.h>
 
@@ -229,7 +228,7 @@ typedef struct {
 	bool inuse;
 	IOBufferMemoryDescriptor *mdp;
 	void *buf;
-	IOUSBCompletion comp;
+	IOUSBHostCompletion comp;
 } pipebuf_t;
 
 class HoRNDIS : public IOEthernetController {
@@ -246,11 +245,11 @@ private:
 	bool fNetifEnabled;
 	bool fDataDead;
 	 
-	IOUSBInterface *fCommInterface;
-	IOUSBInterface *fDataInterface;
+	IOUSBHostInterface *fCommInterface;
+	IOUSBHostInterface *fDataInterface;
 	
-	IOUSBPipe *fInPipe;
-	IOUSBPipe *fOutPipe;
+	IOUSBHostPipe *fInPipe;
+	IOUSBHostPipe *fOutPipe;
 	
 	IOLock *xid_lock;
 	uint32_t xid;
@@ -258,62 +257,58 @@ private:
 	
 	IOLock *outbuf_lock;
 	pipebuf_t outbufs[N_OUT_BUFS];
-	static void dataWriteComplete(void *obj, void *param, IOReturn ior, UInt32 remaining);
+	void dataWriteComplete(void *obj, void *param, IOReturn ior, UInt32 remaining);
 
 	pipebuf_t inbuf;
-	static void dataReadComplete(void *obj, void *param, IOReturn ior, UInt32 remaining);
+	void dataReadComplete(void *obj, void *param, IOReturn ior, UInt32 remaining);
 
 	bool rndisInit();
 	int rndisCommand(struct rndis_msg_hdr *buf, int buflen);
 	int rndisQuery(void *buf, uint32_t oid, uint32_t in_len, void **reply, int *reply_len);
 	bool rndisSetPacketFilter(uint32_t filter);
 	
+	void rndisCommandCompletion(void* owner, void* parameter, IOReturn status, uint32_t bytesTransferred);
+	void rndisCommandResponseCompletion(void* owner, void* parameter, IOReturn status, uint32_t bytesTransferred);
+
 	bool createMediumTables(void);
 	bool allocateResources(void);
 	void releaseResources(void);
 	bool openInterfaces();
 	bool createNetworkInterface(void);
-	UInt32 outputPacket(mbuf_t pkt, void *param);
-	IOReturn clearPipeStall(IOUSBPipe *thePipe);
+	IOReturn clearPipeStall(IOUSBHostPipe *thePipe);
 	void receivePacket(void *packet, UInt32 size);
-	
 	IOWorkLoop *workloop;
 
 public:
-	IOUSBDevice *fpDevice;
+	IOUSBHostDevice *fpDevice;
 
 	// IOKit overrides
-	virtual bool init(OSDictionary *properties = 0);
-	virtual bool start(IOService *provider);
-	virtual void stop(IOService *provider);
-	virtual bool createWorkLoop();
-	virtual IOWorkLoop *getWorkLoop() const;
-	virtual IOReturn message(UInt32 type, IOService *provider, void *argument = 0);
+	bool init(OSDictionary *properties = 0) override;
+	bool start(IOService *provider) override;
+	void stop(IOService *provider) override;
+	bool createWorkLoop() override;
+	IOWorkLoop *getWorkLoop() const override;
+	IOReturn message(UInt32 type, IOService *provider, void *argument = 0) override;
 
 	// IOEthernetController overrides
-	virtual IOReturn enable(IONetworkInterface *netif);
-	virtual IOReturn disable(IONetworkInterface *netif);
-	virtual IOReturn getPacketFilters(const OSSymbol *group, UInt32 *filters ) const;
-	virtual IOReturn getMaxPacketSize(UInt32 * maxSize) const;
-	virtual IOReturn selectMedium(const IONetworkMedium *medium);
-	virtual IOReturn getHardwareAddress(IOEthernetAddress *addr);
-	virtual IOReturn setPromiscuousMode(bool active);
-	virtual IOOutputQueue *createOutputQueue(void);
-	virtual bool configureInterface(IONetworkInterface *netif);
-	virtual IONetworkInterface *createInterface();
+	IOReturn enable(IONetworkInterface *netif) override;
+	IOReturn disable(IONetworkInterface *netif) override;
+	IOReturn getPacketFilters(const OSSymbol *group, UInt32 *filters ) const override;
+	IOReturn getMaxPacketSize(UInt32 * maxSize) const override;
+	IOReturn selectMedium(const IONetworkMedium *medium) override;
+	IOReturn getHardwareAddress(IOEthernetAddress *addr) override;
+	IOReturn setPromiscuousMode(bool active) override;
+	IOOutputQueue *createOutputQueue(void) override;
+	bool configureInterface(IONetworkInterface *netif) override;
+	IONetworkInterface *createInterface() override;
+	
+	// IONetworkController overrides
+	UInt32 outputPacket(mbuf_t pkt, void *param) override;
 };
 
 /* If there are other ways to get access to a device, we probably want them here. */
 class HoRNDISUSBInterface : public HoRNDIS {
 	OSDeclareDefaultStructors(HoRNDISUSBInterface);
 public:
-	virtual bool start(IOService *provider);
-};
-
-class HoRNDISInterface : public IOEthernetInterface {
-	OSDeclareDefaultStructors(HoRNDISInterface);
-	int maxmtu;
-public:
-	virtual bool init(IONetworkController * controller, int mtu);
-	virtual bool setMaxTransferUnit(UInt32 mtu);
+	bool start(IOService *provider) override;
 };
