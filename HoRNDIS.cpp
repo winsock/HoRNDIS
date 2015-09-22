@@ -93,7 +93,7 @@ bool HoRNDISUSBInterface::start(IOService *provider) {
 	
 	intf = OSDynamicCast(IOUSBHostInterface, provider);
 	if (!intf) {
-		LOG(V_ERROR, "cast to IOUSBInterface failed?");
+		LOG(V_ERROR, "cast to IOUSBHostInterface failed?");
 		return false;
 	}
 	

@@ -33,7 +33,7 @@
 			<key>IOClass</key>
 			<string>HoRNDISUSBInterface</string>
 			<key>IOProviderClass</key>
-			<string>IOUSBInterface</string>
+			<string>IOUSBHostInterface</string>
 			<key>bInterfaceClass</key>
 			<integer>2</integer>
 			<key>bInterfaceProtocol</key>
@@ -93,7 +93,7 @@
 			<key>IOClass</key>
 			<string>HoRNDISUSBInterface</string>
 			<key>IOProviderClass</key>
-			<string>IOUSBInterface</string>
+			<string>IOUSBHostInterface</string>
 			<key>bInterfaceClass</key>
 			<integer>224</integer>
 			<key>bInterfaceProtocol</key>
@@ -116,6 +116,8 @@
 		<string>1.1</string>
 		<key>com.apple.iokit.IOUSBFamily</key>
 		<string>1.8</string>
+		<key>com.apple.iokit.IOUSBHostFamily</key>
+		<string>1.0.1</string>
 	</dict>
 </dict>
 </plist>
