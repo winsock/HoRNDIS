@@ -48,7 +48,7 @@
 			<key>IOClass</key>
 			<string>AppleUSBComposite</string>
 			<key>IOProviderClass</key>
-			<string>IOUSBDevice</string>
+			<string>IOUSBHostDevice</string>
 			<key>bDeviceClass</key>
 			<integer>2</integer>
 			<key>bDeviceSubClass</key>
@@ -63,7 +63,7 @@
 			<key>IOClass</key>
 			<string>AppleUSBComposite</string>
 			<key>IOProviderClass</key>
-			<string>IOUSBDevice</string>
+			<string>IOUSBHostDevice</string>
 			<key>bDeviceClass</key>
 			<integer>239</integer>
 			<key>bDeviceSubClass</key>
@@ -78,7 +78,7 @@
 			<key>IOClass</key>
 			<string>AppleUSBComposite</string>
 			<key>IOProviderClass</key>
-			<string>IOUSBDevice</string>
+			<string>IOUSBHostDevice</string>
 			<key>bDeviceClass</key>
 			<integer>224</integer>
 			<key>bDeviceSubClass</key>
@@ -114,8 +114,6 @@
 		<string>8.0</string>
 		<key>com.apple.iokit.IONetworkingFamily</key>
 		<string>1.1</string>
-		<key>com.apple.iokit.IOUSBFamily</key>
-		<string>1.8</string>
 		<key>com.apple.iokit.IOUSBHostFamily</key>
 		<string>1.0.1</string>
 	</dict>

@@ -44,7 +44,6 @@
 #include <IOKit/pwr_mgt/RootDomain.h>
 
 #include <IOKit/usb/StandardUSB.h>
-#include <IOKit/usb/IOUSBHostFamily.h>
 #include <IOKit/usb/IOUSBHostDevice.h>
 #include <IOKit/usb/IOUSBHostPipe.h>
 #include <IOKit/usb/IOUSBHostInterface.h>
@@ -53,8 +52,8 @@
 
 extern "C"
 {
-	#include <sys/param.h>
-	#include <sys/mbuf.h>
+#include <sys/param.h>
+#include <sys/mbuf.h>
 }
 
 #define cpu_to_le32(x) (uint32_t)OSSwapHostToLittleInt32(x)
@@ -70,6 +69,23 @@ extern "C"
 #define OUT_BUF_WAIT_TIME  5000000 /* ns */
 
 #define MAX_MTU 1536
+
+enum
+{
+	kSet_Ethernet_Multicast_Filter	= 0x40,
+	kSet_Ethernet_PM_Packet_Filter	= 0x41,
+	kGet_Ethernet_PM_Packet_Filter	= 0x42,
+	kSet_Ethernet_Packet_Filter		= 0x43,
+	kGet_Ethernet_Statistics		= 0x44,
+	kGet_AUX_Inputs			= 4,
+	kSet_AUX_Outputs			= 5,
+	kSet_Temp_MAC			= 6,
+	kGet_Temp_MAC			= 7,
+	kSet_URB_Size			= 8,
+	kSet_SOFS_To_Wait			= 9,
+	kSet_Even_Packets			= 10,
+	kScan				= 0xFF
+};
 
 /***** RNDIS definitions -- from linux/include/linux/usb/rndis_host.h ****/
 
@@ -193,10 +209,39 @@ struct rndis_set_c {
 #define RNDIS_PHYSICAL_MEDIUM_WIRELESS_WAN      cpu_to_le32(0x00000008)
 #define RNDIS_PHYSICAL_MEDIUM_MAX               cpu_to_le32(0x00000009)
 
+/* Object Identifiers used by NdisRequest Query/Set Information */
+/* General (Required) Objects */
+#define RNDIS_OID_GEN_SUPPORTED_LIST            cpu_to_le32(0x00010101)
+#define RNDIS_OID_GEN_HARDWARE_STATUS           cpu_to_le32(0x00010102)
+#define RNDIS_OID_GEN_MEDIA_SUPPORTED           cpu_to_le32(0x00010103)
+#define RNDIS_OID_GEN_MEDIA_IN_USE              cpu_to_le32(0x00010104)
+#define RNDIS_OID_GEN_MAXIMUM_LOOKAHEAD         cpu_to_le32(0x00010105)
+#define RNDIS_OID_GEN_MAXIMUM_FRAME_SIZE        cpu_to_le32(0x00010106)
+#define RNDIS_OID_GEN_LINK_SPEED                cpu_to_le32(0x00010107)
+#define RNDIS_OID_GEN_TRANSMIT_BUFFER_SPACE     cpu_to_le32(0x00010108)
+#define RNDIS_OID_GEN_RECEIVE_BUFFER_SPACE      cpu_to_le32(0x00010109)
+#define RNDIS_OID_GEN_TRANSMIT_BLOCK_SIZE       cpu_to_le32(0x0001010A)
+#define RNDIS_OID_GEN_RECEIVE_BLOCK_SIZE        cpu_to_le32(0x0001010B)
+#define RNDIS_OID_GEN_VENDOR_ID                 cpu_to_le32(0x0001010C)
+#define RNDIS_OID_GEN_VENDOR_DESCRIPTION        cpu_to_le32(0x0001010D)
+#define RNDIS_OID_GEN_CURRENT_PACKET_FILTER     cpu_to_le32(0x0001010E)
+#define RNDIS_OID_GEN_CURRENT_LOOKAHEAD         cpu_to_le32(0x0001010F)
+#define RNDIS_OID_GEN_DRIVER_VERSION            cpu_to_le32(0x00010110)
+#define RNDIS_OID_GEN_MAXIMUM_TOTAL_SIZE        cpu_to_le32(0x00010111)
+#define RNDIS_OID_GEN_PROTOCOL_OPTIONS          cpu_to_le32(0x00010112)
+#define RNDIS_OID_GEN_MAC_OPTIONS               cpu_to_le32(0x00010113)
+#define RNDIS_OID_GEN_MEDIA_CONNECT_STATUS      cpu_to_le32(0x00010114)
+#define RNDIS_OID_GEN_MAXIMUM_SEND_PACKETS      cpu_to_le32(0x00010115)
+#define RNDIS_OID_GEN_VENDOR_DRIVER_VERSION     cpu_to_le32(0x00010116)
+#define RNDIS_OID_GEN_SUPPORTED_GUIDS           cpu_to_le32(0x00010117)
+#define RNDIS_OID_GEN_NETWORK_LAYER_ADDRESSES   cpu_to_le32(0x00010118)
+#define RNDIS_OID_GEN_TRANSPORT_HEADER_OFFSET   cpu_to_le32(0x00010119)
+#define RNDIS_OID_GEN_PHYSICAL_MEDIUM           cpu_to_le32(0x00010202)
+#define RNDIS_OID_GEN_MACHINE_NAME              cpu_to_le32(0x0001021A)
+#define RNDIS_OID_GEN_RNDIS_CONFIG_PARAMETER    cpu_to_le32(0x0001021B)
+#define RNDIS_OID_GEN_VLAN_ID                   cpu_to_le32(0x0001021C)
+
 #define OID_802_3_PERMANENT_ADDRESS             cpu_to_le32(0x01010101)
-#define OID_GEN_MAXIMUM_FRAME_SIZE              cpu_to_le32(0x00010106)
-#define OID_GEN_CURRENT_PACKET_FILTER           cpu_to_le32(0x0001010e)
-#define OID_GEN_PHYSICAL_MEDIUM                 cpu_to_le32(0x00010202)
 
 /* packet filter bits used by OID_GEN_CURRENT_PACKET_FILTER */
 #define RNDIS_PACKET_TYPE_DIRECTED              cpu_to_le32(0x00000001)
@@ -214,13 +259,14 @@ struct rndis_set_c {
 
 /* default filter used with RNDIS devices */
 #define RNDIS_DEFAULT_FILTER ( \
-        RNDIS_PACKET_TYPE_DIRECTED | \
-        RNDIS_PACKET_TYPE_BROADCAST | \
-        RNDIS_PACKET_TYPE_ALL_MULTICAST | \
-        RNDIS_PACKET_TYPE_PROMISCUOUS)
+RNDIS_PACKET_TYPE_DIRECTED | \
+RNDIS_PACKET_TYPE_BROADCAST | \
+RNDIS_PACKET_TYPE_ALL_MULTICAST | \
+RNDIS_PACKET_TYPE_PROMISCUOUS)
 
 #define USB_CDC_SEND_ENCAPSULATED_COMMAND       0x00
 #define USB_CDC_GET_ENCAPSULATED_RESPONSE       0x01
+#define WATCHDOG_TIMER_MS       1000
 
 /***** Actual class definitions *****/
 
@@ -233,18 +279,23 @@ typedef struct {
 
 class HoRNDIS : public IOEthernetController {
 	OSDeclareDefaultStructors(HoRNDIS);	// Constructor & Destructor stuff
-
+	
 private:
 	bool fTerminate; // being terminated now (i.e., device being unplugged)
-		
+	
 	IOEthernetInterface *fNetworkInterface;
 	IONetworkStats *fpNetStats;
 	
 	OSDictionary *fMediumDict;
-
+	
+	IOWorkLoop *fWorkLoop;
+	IOTimerEventSource *fTimerSource;
+	
 	bool fNetifEnabled;
 	bool fDataDead;
-	 
+	
+	IOUSBHostCompletion merCompletion;
+	
 	IOUSBHostInterface *fCommInterface;
 	IOUSBHostInterface *fDataInterface;
 	
@@ -258,10 +309,10 @@ private:
 	IOLock *outbuf_lock;
 	pipebuf_t outbufs[N_OUT_BUFS];
 	void dataWriteComplete(void *obj, void *param, IOReturn ior, UInt32 remaining);
-
+	
 	pipebuf_t inbuf;
 	void dataReadComplete(void *obj, void *param, IOReturn ior, UInt32 remaining);
-
+	
 	bool rndisInit();
 	int rndisCommand(struct rndis_msg_hdr *buf, int buflen);
 	int rndisQuery(void *buf, uint32_t oid, uint32_t in_len, void **reply, int *reply_len);
@@ -269,7 +320,7 @@ private:
 	
 	void rndisCommandCompletion(void* owner, void* parameter, IOReturn status, uint32_t bytesTransferred);
 	void rndisCommandResponseCompletion(void* owner, void* parameter, IOReturn status, uint32_t bytesTransferred);
-
+	
 	bool createMediumTables(void);
 	bool allocateResources(void);
 	void releaseResources(void);
@@ -277,19 +328,20 @@ private:
 	bool createNetworkInterface(void);
 	IOReturn clearPipeStall(IOUSBHostPipe *thePipe);
 	void receivePacket(void *packet, UInt32 size);
-	IOWorkLoop *workloop;
-
+	static void timerFired(OSObject *owner, IOTimerEventSource *sender);
+	void timeoutOccurred(IOTimerEventSource *timer);
+	
 public:
 	IOUSBHostDevice *fpDevice;
-
+	UInt16 fPacketFilter;
+	
 	// IOKit overrides
 	bool init(OSDictionary *properties = 0) override;
 	bool start(IOService *provider) override;
 	void stop(IOService *provider) override;
-	bool createWorkLoop() override;
-	IOWorkLoop *getWorkLoop() const override;
+	void free() override;
 	IOReturn message(UInt32 type, IOService *provider, void *argument = 0) override;
-
+	
 	// IOEthernetController overrides
 	IOReturn enable(IONetworkInterface *netif) override;
 	IOReturn disable(IONetworkInterface *netif) override;

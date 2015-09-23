@@ -57,6 +57,8 @@ bool HoRNDIS::init(OSDictionary *properties) {
 	fNetworkInterface = NULL;
 	fpNetStats = NULL;
 	
+	fPacketFilter = RNDIS_DEFAULT_FILTER;
+	
 	fMediumDict = NULL;
 	
 	fNetifEnabled = false;
@@ -113,6 +115,14 @@ bool HoRNDIS::start(IOService *provider) {
 		return false;
 	}
 	
+	if (!fWorkLoop) {
+		fWorkLoop = getWorkLoop();
+		if (!fWorkLoop) {
+			LOG(V_ERROR, "start - getWorkLoop failed");
+			return false;
+		}
+	}
+	
 	if (!openInterfaces())
 		goto bailout;
 	if (!rndisInit())
@@ -121,6 +131,10 @@ bool HoRNDIS::start(IOService *provider) {
 	/* Looks like everything's good... publish the interface! */
 	if (!createNetworkInterface())
 		goto bailout;
+	
+	if (fWorkLoop) {
+		fWorkLoop->retain();
+	}
 	
 	LOG(V_DEBUG, "successful");
 	
@@ -136,61 +150,50 @@ bailout:
 void HoRNDIS::stop(IOService *provider) {
 	LOG(V_DEBUG, "stop");
 	
+	// Release all resources
+	fNetifEnabled = false;
+	
+	releaseResources();
+	
+	if (fNetworkInterface) {
+		detachInterface(fNetworkInterface, FALSE);
+	}
+	
+	super::stop(provider);
+	
+	return;
+}
+
+void HoRNDIS::free() {
+	LOG(V_DEBUG, "free");
+
 	if (fNetworkInterface) {
 		fNetworkInterface->release();
-		fNetworkInterface = NULL;
 	}
 	
 	if (fCommInterface) {
 		fCommInterface->close(this);
 		fCommInterface->release();
-		fCommInterface = NULL;
 	}
 	
 	if (fDataInterface) {
 		fDataInterface->close(this);
 		fDataInterface->release();
-		fDataInterface = NULL;
 	}
 	
 	if (fMediumDict) {
 		fMediumDict->release();
-		fMediumDict = NULL;
+	}
+	
+	if (fWorkLoop) {
+		fWorkLoop->release();
 	}
 	
 	if (xid_lock) {
 		IOLockFree(xid_lock);
-		xid_lock = NULL;
 	}
-	
-	super::stop(provider);
+	super::free();
 }
-
-/* Creating a workloop of our own seems to be necessary on Mac OS X 10.10 --
- * otherwise, we can have not just reentrant calls to HoRNDIS::enable(), but
- * also even to IOEthernetInterface::syncSIOCSIFFLAGS()!  Then, ::enable()
- * "takes a while", which means that on a second call to syncSIOCSIFFLAGS,
- * we get reentrantly invoked, and then -- worse yet -- we fail, and it
- * disables the interface, freeing resources out from under the first
- * ::enable().
- *
- * This "seems to fix it", but it's a workaround for something that I can't
- * possible know, since source for OS X 10.10 does not exist yet.
- *
- * "This would never have happened if Steve Jobs were still CEO."
- */
-
-bool HoRNDIS::createWorkLoop() {
-	LOG(V_DEBUG, "creating workloop");
-	workloop = IOWorkLoop::workLoop();
-	
-	return !!workloop;
-}
-
-IOWorkLoop *HoRNDIS::getWorkLoop() const {
-	return workloop;
-}
-
 
 bool HoRNDIS::openInterfaces() {
 	StandardUSB::InterfaceDescriptor req;
@@ -353,6 +356,21 @@ IONetworkInterface *HoRNDIS::createInterface() {
 bool HoRNDIS::createNetworkInterface() {
 	LOG(V_DEBUG, "attaching and registering interface");
 	
+	// Allocate Timer event source
+	
+	fTimerSource = IOTimerEventSource::timerEventSource(this, timerFired);
+	if (fTimerSource == NULL) {
+		LOG(V_ERROR, "createNetworkInterface - Allocate Timer event source failed");
+		return false;
+	}
+	
+	if (fWorkLoop) {
+		if (fWorkLoop->addEventSource(fTimerSource) != kIOReturnSuccess) {
+			LOG(V_ERROR, "createNetworkInterface - Add Timer event source failed");
+			return false;
+		}
+	}
+	
 	/* MTU is initialized before we get here, so this is a safe time to do this. */
 	if (!attachInterface((IONetworkInterface **)&fNetworkInterface, true)) {
 		LOG(V_ERROR, "attachInterface failed?");
@@ -409,7 +427,7 @@ IOReturn HoRNDIS::enable(IONetworkInterface *netif) {
 	LOG(V_DEBUG, "txqueue started");
 	
 	/* Tell the other end to start transmitting. */
-	if (!rndisSetPacketFilter(RNDIS_DEFAULT_FILTER))
+	if (!rndisSetPacketFilter(fPacketFilter))
 		goto bailout;
 	
 	/* Now we can say we're alive. */
@@ -525,27 +543,32 @@ void HoRNDIS::releaseResources() {
 }
 
 IOOutputQueue* HoRNDIS::createOutputQueue() {
-	return IOBasicOutputQueue::withTarget(this, TRANSMIT_QUEUE_SIZE);
+	if (!fWorkLoop) {
+		fWorkLoop = getWorkLoop();
+		if (!fWorkLoop) {
+			LOG(V_ERROR, "createOutputQueue - getWorkLoop failed");
+			return NULL;
+		}
+	}
+	return IOGatedOutputQueue::withTarget(this, fWorkLoop, TRANSMIT_QUEUE_SIZE);
 }
 
 bool HoRNDIS::configureInterface(IONetworkInterface *netif) {
 	IONetworkData *nd;
 	
-	if (super::configureInterface(netif) == false)
-	{
+	if (super::configureInterface(netif) == false) {
 		LOG(V_ERROR, "super failed");
 		return false;
 	}
 	
 	nd = netif->getNetworkData(kIONetworkStatsKey);
-	if (!nd || !(fpNetStats = (IONetworkStats *)nd->getBuffer()))
-	{
+	if (!nd || !(fpNetStats = (IONetworkStats *)nd->getBuffer())) {
 		LOG(V_ERROR, "network statistics buffer unavailable?");
 		return false;
 	}
 	
 	LOG(V_PTR, "fpNetStats: %p", fpNetStats);
-	
+
 	return true;
 }
 
@@ -558,7 +581,7 @@ IOReturn HoRNDIS::getPacketFilters(const OSSymbol *group, UInt32 *filters) const
 	if (group == gIOEthernetWakeOnLANFilterGroup)
 		*filters = 0;
 	else if (group == gIONetworkFilterGroup)
-		*filters = kIOPacketFilterUnicast | kIOPacketFilterBroadcast | kIOPacketFilterMulticast | kIOPacketFilterPromiscuous;
+		*filters = fPacketFilter;
 	else
 		rtn = super::getPacketFilters(group, filters);
 	
@@ -605,9 +628,22 @@ IOReturn HoRNDIS::getHardwareAddress(IOEthernetAddress *ea) {
 }
 
 IOReturn HoRNDIS::setPromiscuousMode(bool active) {
-	(void) active;
+	if (!fNetifEnabled) {
+		return kIOReturnSuccess;
+	}
 	
-	/* XXX This actually needs to get passed down to support 'real' RNDIS devices, but it will work okay for Android devices. */
+	if (((fPacketFilter & kIOPacketFilterPromiscuous) && active) || (!(fPacketFilter & kIOPacketFilterPromiscuous) && !active)) {
+		return kIOReturnOutputSuccess;
+	} else {
+		if (active) {
+			fPacketFilter |= kIOPacketFilterPromiscuous;
+		} else {
+			fPacketFilter &= ~kIOPacketFilterPromiscuous;
+		}
+	}
+	if (!this->rndisSetPacketFilter(fPacketFilter)) {
+		return kIOReturnIOError;
+	}
 	
 	return kIOReturnSuccess;
 }
@@ -905,6 +941,54 @@ void HoRNDIS::receivePacket(void *packet, UInt32 size) {
 	}
 }
 
+/****************************************************************************************************/
+//
+//		Method:		HoRNDIS::timerFired
+//
+//		Inputs:
+//
+//		Outputs:
+//
+//		Desc:		Static member function called when a timer event fires.
+//
+/****************************************************************************************************/
+void HoRNDIS::timerFired(OSObject *owner, IOTimerEventSource *sender)
+{
+	
+	//    XTRACE(this, 0, 0, "timerFired");
+	
+	if (owner) {
+		HoRNDIS* target = OSDynamicCast(HoRNDIS, owner);
+		
+		if (target) {
+			target->timeoutOccurred(sender);
+		}
+	}
+	
+}/* end timerFired */
+
+/****************************************************************************************************/
+//
+//		Method:		HoRNDIS::timeoutOccurred
+//
+//		Inputs:
+//
+//		Outputs:
+//
+//		Desc:		Timeout handler, used for stats gathering.
+//
+/****************************************************************************************************/
+
+void HoRNDIS::timeoutOccurred(IOTimerEventSource * /*timer*/)
+{
+	// Stats gathering should be happening here :/
+	
+	
+	// Restart the watchdog timer
+	fTimerSource->setTimeoutMS(WATCHDOG_TIMER_MS);
+	
+}/* end timeoutOccurred */
+
 
 /***** RNDIS command logic *****/
 
@@ -937,12 +1021,11 @@ int HoRNDIS::rndisCommand(struct rndis_msg_hdr *buf, int buflen) {
 	
 	pipebuf_t *pipebuf = new pipebuf_t;
 	pipebuf->buf = buf;
+	pipebuf->comp.owner = this;
+	pipebuf->comp.parameter = pipebuf;
+	pipebuf->comp.action = OSMemberFunctionCast(IOUSBHostCompletionAction, this, &HoRNDIS::rndisCommandCompletion);
 	
-	IOUSBHostCompletion completion;
-	completion.owner = this;
-	completion.parameter = pipebuf;
-	completion.action = OSMemberFunctionCast(IOUSBHostCompletionAction, this, &HoRNDIS::rndisCommandCompletion);
-	rc = fCommInterface->deviceRequest(rq, txdsc, &completion);
+	rc = fCommInterface->deviceRequest(rq, txdsc, &pipebuf->comp);
 	txdsc->complete();
 	txdsc->release();
 	
@@ -969,13 +1052,9 @@ void HoRNDIS::rndisCommandCompletion(void *owner, void *parameter, IOReturn stat
 	rxrq.wLength = RNDIS_CMD_BUF_SZ;
 	
 	pipebuf->mdp = rxdsc;
+	pipebuf->comp.action = OSMemberFunctionCast(IOUSBHostCompletionAction, this, &HoRNDIS::rndisCommandResponseCompletion);
 	
-	IOUSBHostCompletion completion;
-	completion.owner = this;
-	completion.parameter = pipebuf;
-	completion.action = OSMemberFunctionCast(IOUSBHostCompletionAction, this, &HoRNDIS::rndisCommandResponseCompletion);
-	
-	fCommInterface->deviceRequest(rxrq, rxdsc, &completion);
+	fCommInterface->deviceRequest(rxrq, rxdsc, &pipebuf->comp);
 	
 }
 
@@ -1124,7 +1203,7 @@ bool HoRNDIS::rndisSetPacketFilter(uint32_t filter) {
 	memset(u.buf, 0, sizeof *u.set);
 	u.set->msg_type = RNDIS_MSG_SET;
 	u.set->msg_len = cpu_to_le32(4 + sizeof *u.set);
-	u.set->oid = OID_GEN_CURRENT_PACKET_FILTER;
+	u.set->oid = RNDIS_OID_GEN_CURRENT_PACKET_FILTER;
 	u.set->len = cpu_to_le32(4);
 	u.set->offset = cpu_to_le32((sizeof *u.set) - 8);
 	*(uint32_t *)(u.buf + sizeof *u.set) = filter;
