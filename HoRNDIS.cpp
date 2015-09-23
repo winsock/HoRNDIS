@@ -294,8 +294,8 @@ bool HoRNDIS::openInterfaces() {
 	// Replacement: getInterfaceDescriptor and StandardUSB::getNextAssociatedDescriptorWithType to find an endpoint descriptor,
 	// then use copyPipe to retrieve the pipe object
 	{
-		const Descriptor *descriptor = StandardUSB::getNextAssociatedDescriptorWithType(fDataInterface->getConfigurationDescriptor(), fDataInterface->getInterfaceDescriptor(), &epReq, kDescriptorTypeEndpoint);
-		const EndpointDescriptor *endpointDescriptor = reinterpret_cast<const EndpointDescriptor *>(descriptor);
+		const EndpointDescriptor *endpointDescriptor = StandardUSB::getNextEndpointDescriptor(fDataInterface->getConfigurationDescriptor(), fDataInterface->getInterfaceDescriptor(), &epReq);
+		/** THIS FOLLOWING LINE causes a page fault!!! XXX FIXME, KDK(Kernel debug kit) does not provide any more logging info -.- **/
 		fInPipe = fDataInterface->copyPipe(endpointDescriptor->bEndpointAddress);
 	}
 	
@@ -308,8 +308,8 @@ bool HoRNDIS::openInterfaces() {
 	
 	epReq.bmAttributes = kEndpointDescriptorDirectionOut;
 	{
-		const Descriptor *descriptor = StandardUSB::getNextAssociatedDescriptorWithType(fDataInterface->getConfigurationDescriptor(), fDataInterface->getInterfaceDescriptor(), &epReq, kDescriptorTypeEndpoint);
-		const EndpointDescriptor *endpointDescriptor = reinterpret_cast<const EndpointDescriptor *>(descriptor);
+		const EndpointDescriptor *endpointDescriptor = StandardUSB::getNextEndpointDescriptor(fDataInterface->getConfigurationDescriptor(), fDataInterface->getInterfaceDescriptor(), &epReq);
+		// I assume this will have the same issue as the above code one line 299 -.-
 		fOutPipe = fDataInterface->copyPipe(endpointDescriptor->bEndpointAddress);
 	}
 	if (!fOutPipe) {
