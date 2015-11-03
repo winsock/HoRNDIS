@@ -193,38 +193,17 @@ void HoRNDIS::free() {
 	super::free();
 }
 
-bool HoRNDIS::openInterfaces() {
-	IOUSBFindInterfaceRequest req;
-	IOUSBFindEndpointRequest epReq;
+bool HoRNDIS::openInterfaces(IOUSBInterface* passiveMatch) {
 	int rc;
-	
-	/* open up the RNDIS control interface */
-	req.bInterfaceClass    = 0xE0;
-	req.bInterfaceSubClass = 0x01;
-	req.bInterfaceProtocol = 0x03;
-	req.bAlternateSetting  = kIOUSBFindInterfaceDontCare;
-	
-	fCommInterface = fpDevice->FindNextInterface(NULL, &req);
-	LOG(V_PTR, "PTR: fCommInterface: %p", fCommInterface);
-	if (!fCommInterface) {
-		/* Maybe it's one of those stupid Galaxy S IIs? (issue #5) */
-		// Actually this should be the class used... I think samsung is actually right here.
-		req.bInterfaceClass    = 0x02;
-		req.bInterfaceSubClass = 0x02;
-		req.bInterfaceProtocol = 0xFF;
-		req.bAlternateSetting  = kIOUSBFindInterfaceDontCare;
-		
-		fCommInterface = fpDevice->FindNextInterface(NULL, &req);
-		if (!fCommInterface) { /* Okay, I really have no clue.  Oh well. */
-			LOG(V_ERROR, "Couldn't find a matching RNDIS control interface!");
-			return false;
-		}
-	}
 
 	rc = fCommInterface->open(this);
-	if (!rc)
+	if (!rc) { /* Okay, I really have no clue.  Oh well. */
+		LOG(V_ERROR, "Couldn't open the RNDIS control interface!");
 		goto bailout1;
-
+	}
+	
+	IOUSBFindInterfaceRequest req;
+	IOUSBFindEndpointRequest epReq;
 	/* open up the RNDIS data interface */
 	req.bInterfaceClass    = 0x0A;
 	req.bInterfaceSubClass = 0x00;
@@ -232,13 +211,18 @@ bool HoRNDIS::openInterfaces() {
 	req.bAlternateSetting  = kIOUSBFindInterfaceDontCare;
 	
 	fDataInterface = fpDevice->FindNextInterface(NULL, &req);	
-	if (!fDataInterface)
+	if (!fDataInterface) {
+		LOG(V_ERROR, "Couldn't find the matching RNDIS data interface!");
 		goto bailout2;
+	}
+	
 	LOG(V_PTR, "PTR: fDataInterface: %p", fDataInterface);
 	
 	rc = fDataInterface->open(this);
-	if (!rc)
+	if (!rc) {
+		LOG(V_ERROR, "Couldn't open the RNDIS data interface!");
 		goto bailout3;
+	}
 	
 	if (fDataInterface->GetNumEndpoints() < 2) {
 		LOG(V_ERROR, "not enough endpoints on data interface?");
@@ -251,7 +235,7 @@ bool HoRNDIS::openInterfaces() {
 	/* open up the endpoints */
 	epReq.type = kUSBBulk;
 	epReq.direction = kUSBIn;
-	epReq.maxPacketSize	= 0;
+	epReq.maxPacketSize = 0;
 	epReq.interval = 0;
 	fInPipe = fDataInterface->FindNextPipe(0, &epReq);
 	if (!fInPipe) {

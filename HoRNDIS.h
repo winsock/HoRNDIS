@@ -304,7 +304,7 @@ private:
 	bool createMediumTables(void);
 	bool allocateResources(void);
 	void releaseResources(void);
-	bool openInterfaces();
+	bool openInterfaces(IOUSBInterface* passiveMatched);
 	bool createNetworkInterface(void);
 	UInt32 outputPacket(mbuf_t pkt, void *param);
 	IOReturn clearPipeStall(IOUSBPipe *thePipe);
