@@ -41,7 +41,6 @@
 
 OSDefineMetaClassAndStructors(HoRNDIS, IOEthernetController);
 OSDefineMetaClassAndStructors(HoRNDISUSBInterface, HoRNDIS);
-OSDefineMetaClassAndStructors(HoRNDISInterface, IOEthernetInterface);
 
 bool HoRNDIS::init(OSDictionary *properties) {
 	int i;
@@ -57,7 +56,9 @@ bool HoRNDIS::init(OSDictionary *properties) {
 	
 	fNetworkInterface = NULL;
 	fpNetStats = NULL;
-
+	
+	fPacketFilter = RNDIS_DEFAULT_FILTER;
+	
 	fMediumDict = NULL;
 	
 	fNetifEnabled = false;
@@ -110,10 +111,17 @@ bool HoRNDIS::start(IOService *provider) {
 		return false;
 
 	if (!fpDevice) {
-		stop(provider);
 		return false;
 	}
-
+	
+	if (!fWorkLoop) {
+		fWorkLoop = getWorkLoop();
+		if (!fWorkLoop) {
+			LOG(V_ERROR, "start - getWorkLoop failed");
+			return false;
+		}
+	}
+	
 	if (!openInterfaces())
 		goto bailout;
 	if (!rndisInit())
@@ -123,6 +131,10 @@ bool HoRNDIS::start(IOService *provider) {
 	if (!createNetworkInterface())
 		goto bailout;
 	
+	if (fWorkLoop) {
+		fWorkLoop->retain();
+	}
+	
 	LOG(V_DEBUG, "successful");
 	
 	return true;
@@ -130,68 +142,56 @@ bool HoRNDIS::start(IOService *provider) {
 bailout:
 	fpDevice->close(this);
 	fpDevice = NULL;
-	stop(provider);
 	return false;
 }
 
 void HoRNDIS::stop(IOService *provider) {
 	LOG(V_DEBUG, "stop");
 	
+	// Release all resources
+	fNetifEnabled = false;
+	
+	releaseResources();
+	
+	if (fNetworkInterface) {
+		detachInterface(fNetworkInterface, FALSE);
+	}
+	
+	super::stop(provider);
+	
+	return;
+}
+
+void HoRNDIS::free() {
+	LOG(V_DEBUG, "free");
+
 	if (fNetworkInterface) {
 		fNetworkInterface->release();
-		fNetworkInterface = NULL;
 	}
-
+	
 	if (fCommInterface) {
 		fCommInterface->close(this);
 		fCommInterface->release();
-		fCommInterface = NULL;	
 	}
 	
 	if (fDataInterface) {
-		fDataInterface->close(this);	
+		fDataInterface->close(this);
 		fDataInterface->release();
-		fDataInterface = NULL;	
 	}
-
+	
 	if (fMediumDict) {
 		fMediumDict->release();
-		fMediumDict = NULL;
+	}
+	
+	if (fWorkLoop) {
+		fWorkLoop->release();
 	}
 	
 	if (xid_lock) {
 		IOLockFree(xid_lock);
-		xid_lock = NULL;
 	}
-		
-	super::stop(provider);
+	super::free();
 }
-
-/* Creating a workloop of our own seems to be necessary on Mac OS X 10.10 --
- * otherwise, we can have not just reentrant calls to HoRNDIS::enable(), but
- * also even to IOEthernetInterface::syncSIOCSIFFLAGS()!  Then, ::enable()
- * "takes a while", which means that on a second call to syncSIOCSIFFLAGS,
- * we get reentrantly invoked, and then -- worse yet -- we fail, and it
- * disables the interface, freeing resources out from under the first
- * ::enable().
- *
- * This "seems to fix it", but it's a workaround for something that I can't
- * possible know, since source for OS X 10.10 does not exist yet.
- *
- * "This would never have happened if Steve Jobs were still CEO."
- */
-
-bool HoRNDIS::createWorkLoop() {
-	LOG(V_DEBUG, "creating workloop");
-	workloop = IOWorkLoop::workLoop();
-	
-	return !!workloop;
-}
-
-IOWorkLoop *HoRNDIS::getWorkLoop() const {
-	return workloop;
-}
-
 
 bool HoRNDIS::openInterfaces() {
 	IOUSBFindInterfaceRequest req;
@@ -208,6 +208,7 @@ bool HoRNDIS::openInterfaces() {
 	LOG(V_PTR, "PTR: fCommInterface: %p", fCommInterface);
 	if (!fCommInterface) {
 		/* Maybe it's one of those stupid Galaxy S IIs? (issue #5) */
+		// Actually this should be the class used... I think samsung is actually right here.
 		req.bInterfaceClass    = 0x02;
 		req.bInterfaceSubClass = 0x02;
 		req.bInterfaceProtocol = 0xFF;
@@ -286,34 +287,14 @@ bailout1:
 	return false;
 }
 
-/* We need our own createInterface (overriding the one in IOEthernetController) because we need our own subclass of IOEthernetInterface.  Why's that, you say?  Well, we need that because that's the only way to set a different default MTU.  Sigh... */
-
-bool HoRNDISInterface::init(IONetworkController * controller, int mtu) {
-	maxmtu = mtu;
-	if (IOEthernetInterface::init(controller) == false)
-		return false;
-	LOG(V_NOTE, "starting up with MTU %d", mtu);
-	setMaxTransferUnit(mtu);
-	return true;
-}
-
-bool HoRNDISInterface::setMaxTransferUnit(UInt32 mtu) {
-	if (mtu > maxmtu) {
-		LOG(V_NOTE, "Excuse me, but I said you could have an MTU of %u, and you just tried to set an MTU of %d.  Good try, buddy.", maxmtu, mtu);
-		return false;
-	}
-	IOEthernetInterface::setMaxTransferUnit(mtu);
-	return true;
-}
-
 /* Overrides IOEthernetController::createInterface */
 IONetworkInterface *HoRNDIS::createInterface() {
-	HoRNDISInterface * netif = new HoRNDISInterface;
+	IOEthernetInterface *netif = new IOEthernetInterface;
 	
 	if (!netif)
 		return NULL;
 	
-	if (!netif->init(this, mtu)) {
+	if (!ifnet_set_mtu(netif->getIfnet(), mtu) && netif->setProperty(kIOMaxTransferUnit, mtu)) {
 		netif->release();
 		return NULL;
 	}
@@ -323,6 +304,21 @@ IONetworkInterface *HoRNDIS::createInterface() {
 
 bool HoRNDIS::createNetworkInterface() {
 	LOG(V_DEBUG, "attaching and registering interface");
+	
+	// Allocate Timer event source
+	
+	fTimerSource = IOTimerEventSource::timerEventSource(this, timerFired);
+	if (fTimerSource == NULL) {
+		LOG(V_ERROR, "createNetworkInterface - Allocate Timer event source failed");
+		return false;
+	}
+	
+	if (fWorkLoop) {
+		if (fWorkLoop->addEventSource(fTimerSource) != kIOReturnSuccess) {
+			LOG(V_ERROR, "createNetworkInterface - Add Timer event source failed");
+			return false;
+		}
+	}
 	
 	/* MTU is initialized before we get here, so this is a safe time to do this. */
 	if (!attachInterface((IONetworkInterface **)&fNetworkInterface, true)) {
@@ -380,7 +376,7 @@ IOReturn HoRNDIS::enable(IONetworkInterface *netif) {
 	LOG(V_DEBUG, "txqueue started");
 	
 	/* Tell the other end to start transmitting. */
-	if (!rndisSetPacketFilter(RNDIS_DEFAULT_FILTER))
+	if (!rndisSetPacketFilter(fPacketFilter))
 		goto bailout;
 	
 	/* Now we can say we're alive. */
@@ -496,7 +492,14 @@ void HoRNDIS::releaseResources() {
 }
 
 IOOutputQueue* HoRNDIS::createOutputQueue() {
-	return IOBasicOutputQueue::withTarget(this, TRANSMIT_QUEUE_SIZE);
+	if (!fWorkLoop) {
+		fWorkLoop = getWorkLoop();
+		if (!fWorkLoop) {
+			LOG(V_ERROR, "createOutputQueue - getWorkLoop failed");
+			return NULL;
+		}
+	}
+	return IOGatedOutputQueue::withTarget(this, fWorkLoop, TRANSMIT_QUEUE_SIZE);
 }
 
 bool HoRNDIS::configureInterface(IONetworkInterface *netif) {
@@ -529,7 +532,7 @@ IOReturn HoRNDIS::getPacketFilters(const OSSymbol *group, UInt32 *filters) const
 	if (group == gIOEthernetWakeOnLANFilterGroup)
 		*filters = 0;
 	else if (group == gIONetworkFilterGroup)
-		*filters = kIOPacketFilterUnicast | kIOPacketFilterBroadcast | kIOPacketFilterMulticast | kIOPacketFilterPromiscuous;
+		*filters = fPacketFilter;
 	else
 		rtn = super::getPacketFilters(group, filters);
 
@@ -576,9 +579,22 @@ IOReturn HoRNDIS::getHardwareAddress(IOEthernetAddress *ea) {
 }
 
 IOReturn HoRNDIS::setPromiscuousMode(bool active) {
-	(void) active;
+	if (!fNetifEnabled) {
+		return kIOReturnSuccess;
+	}
 	
-	/* XXX This actually needs to get passed down to support 'real' RNDIS devices, but it will work okay for Android devices. */
+	if (((fPacketFilter & kIOPacketFilterPromiscuous) && active) || (!(fPacketFilter & kIOPacketFilterPromiscuous) && !active)) {
+		return kIOReturnOutputSuccess;
+	} else {
+		if (active) {
+			fPacketFilter |= kIOPacketFilterPromiscuous;
+		} else {
+			fPacketFilter &= ~kIOPacketFilterPromiscuous;
+		}
+	}
+	if (!this->rndisSetPacketFilter(fPacketFilter)) {
+		return kIOReturnIOError;
+	}
 	
 	return kIOReturnSuccess;
 }
@@ -631,10 +647,12 @@ IOReturn HoRNDIS::message(UInt32 type, IOService *provider, void *argument) {
 			/* Try to resurrect any dead reads. */
 			if (fDataDead) {
 				ior = fInPipe->Read(inbuf.mdp, &inbuf.comp, NULL);
-				if (ior != kIOReturnSuccess)
+				if (ior != kIOReturnSuccess) {
 					LOG(V_ERROR, "failed to queue Data pipe read");
+				} else {
+					fDataDead = false;
+				}
 			}
-			fDataDead = false;
 			return kIOReturnSuccess;
 		case kIOUSBMessageHubResumePort:
 			LOG(V_NOTE, "kIOUSBMessageHubResumePort");
@@ -647,7 +665,7 @@ IOReturn HoRNDIS::message(UInt32 type, IOService *provider, void *argument) {
 			break;
 	}
 	
-	return super::message(type, provider, argument);;
+	return super::message(type, provider, argument);
 }
 
 
@@ -724,7 +742,7 @@ UInt32 HoRNDIS::outputPacket(mbuf_t packet, void *param) {
 	
 	/* Now, fire it off! */
 	outbufs[poolIndx].comp.target    = this;
-	outbufs[poolIndx].comp.parameter = (void *)poolIndx;
+	outbufs[poolIndx].comp.parameter = &poolIndx;
 	outbufs[poolIndx].comp.action    = dataWriteComplete;
 	
 	ior = fOutPipe->Write(outbufs[poolIndx].mdp, &outbufs[poolIndx].comp);
@@ -747,11 +765,9 @@ UInt32 HoRNDIS::outputPacket(mbuf_t packet, void *param) {
 
 void HoRNDIS::dataWriteComplete(void *obj, void *param, IOReturn rc, UInt32 remaining) {
 	HoRNDIS	*me = (HoRNDIS *)obj;
-	unsigned long poolIndx = (unsigned long)param;
+	UInt32 poolIndx = *static_cast<UInt32 *>(param);
 	
-	poolIndx = (unsigned long)param;
-	
-	LOG(V_DEBUG, "(rc %08x, poolIndx %ld)", rc, poolIndx);
+	LOG(V_DEBUG, "(rc %08x, poolIndx %u)", rc, poolIndx);
 	
 	/* Free the buffer, and hand it off to anyone who might be waiting for one. */
 	me->outbufs[poolIndx].inuse = false;
@@ -825,7 +841,6 @@ void HoRNDIS::dataReadComplete(void *obj, void *param, IOReturn rc, UInt32 remai
 
 void HoRNDIS::receivePacket(void *packet, UInt32 size) {
 	mbuf_t m;
-	UInt32 submit;
 	IOReturn rv;
 	
 	LOG(V_DEBUG, "sz %d", (int)size);
@@ -879,8 +894,8 @@ void HoRNDIS::receivePacket(void *packet, UInt32 size) {
 			freePacket(m);
 			return;
 		}
-
-		submit = fNetworkInterface->inputPacket(m, data_len);
+		
+		fNetworkInterface->inputPacket(m, data_len);
 		LOG(V_DEBUG, "submitted pkt sz %d", data_len);
 		fpNetStats->inputPackets++;
 		
@@ -888,6 +903,54 @@ void HoRNDIS::receivePacket(void *packet, UInt32 size) {
 		packet = (char *)packet + msg_len;
 	}
 }
+
+/****************************************************************************************************/
+//
+//		Method:		HoRNDIS::timerFired
+//
+//		Inputs:
+//
+//		Outputs:
+//
+//		Desc:		Static member function called when a timer event fires.
+//
+/****************************************************************************************************/
+void HoRNDIS::timerFired(OSObject *owner, IOTimerEventSource *sender)
+{
+	
+	//    XTRACE(this, 0, 0, "timerFired");
+	
+	if (owner) {
+		HoRNDIS* target = OSDynamicCast(HoRNDIS, owner);
+		
+		if (target) {
+			target->timeoutOccurred(sender);
+		}
+	}
+	
+}/* end timerFired */
+
+/****************************************************************************************************/
+//
+//		Method:		HoRNDIS::timeoutOccurred
+//
+//		Inputs:
+//
+//		Outputs:
+//
+//		Desc:		Timeout handler, used for stats gathering.
+//
+/****************************************************************************************************/
+
+void HoRNDIS::timeoutOccurred(IOTimerEventSource * /*timer*/)
+{
+	// Stats gathering should be happening here :/
+	
+	
+	// Restart the watchdog timer
+	fTimerSource->setTimeoutMS(WATCHDOG_TIMER_MS);
+	
+}/* end timeoutOccurred */
 
 
 /***** RNDIS command logic *****/
@@ -1091,7 +1154,7 @@ bool HoRNDIS::rndisSetPacketFilter(uint32_t filter) {
 	memset(u.buf, 0, sizeof *u.set);
 	u.set->msg_type = RNDIS_MSG_SET;
 	u.set->msg_len = cpu_to_le32(4 + sizeof *u.set);
-	u.set->oid = OID_GEN_CURRENT_PACKET_FILTER;
+	u.set->oid = RNDIS_OID_GEN_CURRENT_PACKET_FILTER;
 	u.set->len = cpu_to_le32(4);
 	u.set->offset = cpu_to_le32((sizeof *u.set) - 8);
 	*(uint32_t *)(u.buf + sizeof *u.set) = filter;

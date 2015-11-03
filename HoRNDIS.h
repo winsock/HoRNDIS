@@ -194,10 +194,39 @@ struct rndis_set_c {
 #define RNDIS_PHYSICAL_MEDIUM_WIRELESS_WAN      cpu_to_le32(0x00000008)
 #define RNDIS_PHYSICAL_MEDIUM_MAX               cpu_to_le32(0x00000009)
 
+/* Object Identifiers used by NdisRequest Query/Set Information */
+/* General (Required) Objects */
+#define RNDIS_OID_GEN_SUPPORTED_LIST            cpu_to_le32(0x00010101)
+#define RNDIS_OID_GEN_HARDWARE_STATUS           cpu_to_le32(0x00010102)
+#define RNDIS_OID_GEN_MEDIA_SUPPORTED           cpu_to_le32(0x00010103)
+#define RNDIS_OID_GEN_MEDIA_IN_USE              cpu_to_le32(0x00010104)
+#define RNDIS_OID_GEN_MAXIMUM_LOOKAHEAD         cpu_to_le32(0x00010105)
+#define RNDIS_OID_GEN_MAXIMUM_FRAME_SIZE        cpu_to_le32(0x00010106)
+#define RNDIS_OID_GEN_LINK_SPEED                cpu_to_le32(0x00010107)
+#define RNDIS_OID_GEN_TRANSMIT_BUFFER_SPACE     cpu_to_le32(0x00010108)
+#define RNDIS_OID_GEN_RECEIVE_BUFFER_SPACE      cpu_to_le32(0x00010109)
+#define RNDIS_OID_GEN_TRANSMIT_BLOCK_SIZE       cpu_to_le32(0x0001010A)
+#define RNDIS_OID_GEN_RECEIVE_BLOCK_SIZE        cpu_to_le32(0x0001010B)
+#define RNDIS_OID_GEN_VENDOR_ID                 cpu_to_le32(0x0001010C)
+#define RNDIS_OID_GEN_VENDOR_DESCRIPTION        cpu_to_le32(0x0001010D)
+#define RNDIS_OID_GEN_CURRENT_PACKET_FILTER     cpu_to_le32(0x0001010E)
+#define RNDIS_OID_GEN_CURRENT_LOOKAHEAD         cpu_to_le32(0x0001010F)
+#define RNDIS_OID_GEN_DRIVER_VERSION            cpu_to_le32(0x00010110)
+#define RNDIS_OID_GEN_MAXIMUM_TOTAL_SIZE        cpu_to_le32(0x00010111)
+#define RNDIS_OID_GEN_PROTOCOL_OPTIONS          cpu_to_le32(0x00010112)
+#define RNDIS_OID_GEN_MAC_OPTIONS               cpu_to_le32(0x00010113)
+#define RNDIS_OID_GEN_MEDIA_CONNECT_STATUS      cpu_to_le32(0x00010114)
+#define RNDIS_OID_GEN_MAXIMUM_SEND_PACKETS      cpu_to_le32(0x00010115)
+#define RNDIS_OID_GEN_VENDOR_DRIVER_VERSION     cpu_to_le32(0x00010116)
+#define RNDIS_OID_GEN_SUPPORTED_GUIDS           cpu_to_le32(0x00010117)
+#define RNDIS_OID_GEN_NETWORK_LAYER_ADDRESSES   cpu_to_le32(0x00010118)
+#define RNDIS_OID_GEN_TRANSPORT_HEADER_OFFSET   cpu_to_le32(0x00010119)
+#define RNDIS_OID_GEN_PHYSICAL_MEDIUM           cpu_to_le32(0x00010202)
+#define RNDIS_OID_GEN_MACHINE_NAME              cpu_to_le32(0x0001021A)
+#define RNDIS_OID_GEN_RNDIS_CONFIG_PARAMETER    cpu_to_le32(0x0001021B)
+#define RNDIS_OID_GEN_VLAN_ID                   cpu_to_le32(0x0001021C)
+
 #define OID_802_3_PERMANENT_ADDRESS             cpu_to_le32(0x01010101)
-#define OID_GEN_MAXIMUM_FRAME_SIZE              cpu_to_le32(0x00010106)
-#define OID_GEN_CURRENT_PACKET_FILTER           cpu_to_le32(0x0001010e)
-#define OID_GEN_PHYSICAL_MEDIUM                 cpu_to_le32(0x00010202)
 
 /* packet filter bits used by OID_GEN_CURRENT_PACKET_FILTER */
 #define RNDIS_PACKET_TYPE_DIRECTED              cpu_to_le32(0x00000001)
@@ -222,6 +251,7 @@ struct rndis_set_c {
 
 #define USB_CDC_SEND_ENCAPSULATED_COMMAND       0x00
 #define USB_CDC_GET_ENCAPSULATED_RESPONSE       0x01
+#define WATCHDOG_TIMER_MS       1000
 
 /***** Actual class definitions *****/
 
@@ -245,6 +275,9 @@ private:
 
 	bool fNetifEnabled;
 	bool fDataDead;
+	
+	IOWorkLoop *fWorkLoop;
+	IOTimerEventSource *fTimerSource;
 	 
 	IOUSBInterface *fCommInterface;
 	IOUSBInterface *fDataInterface;
@@ -276,18 +309,18 @@ private:
 	UInt32 outputPacket(mbuf_t pkt, void *param);
 	IOReturn clearPipeStall(IOUSBPipe *thePipe);
 	void receivePacket(void *packet, UInt32 size);
-	
-	IOWorkLoop *workloop;
+	static void timerFired(OSObject *owner, IOTimerEventSource *sender);
+	void timeoutOccurred(IOTimerEventSource *timer);
 
 public:
 	IOUSBDevice *fpDevice;
+	UInt16 fPacketFilter;
 
 	// IOKit overrides
 	virtual bool init(OSDictionary *properties = 0);
 	virtual bool start(IOService *provider);
 	virtual void stop(IOService *provider);
-	virtual bool createWorkLoop();
-	virtual IOWorkLoop *getWorkLoop() const;
+	virtual void free();
 	virtual IOReturn message(UInt32 type, IOService *provider, void *argument = 0);
 
 	// IOEthernetController overrides
