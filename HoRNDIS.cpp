@@ -34,7 +34,7 @@
 #define V_NOTE 2
 #define V_ERROR 3
 
-#define DEBUGLEVEL V_DEBUG
+#define DEBUGLEVEL V_NOTE
 #define LOG(verbosity, s, ...) do { if (verbosity >= DEBUGLEVEL) IOLog(MYNAME ": %s: " s "\n", __func__, ##__VA_ARGS__); } while(0)
 
 #define super IOEthernetController
