@@ -342,11 +342,3 @@ class HoRNDISUSBInterface : public HoRNDIS {
 public:
 	virtual bool start(IOService *provider);
 };
-
-class HoRNDISInterface : public IOEthernetInterface {
-	OSDeclareDefaultStructors(HoRNDISInterface);
-	int maxmtu;
-public:
-	virtual bool init(IONetworkController * controller, int mtu);
-	virtual bool setMaxTransferUnit(UInt32 mtu);
-};
